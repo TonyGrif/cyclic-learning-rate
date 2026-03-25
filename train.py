@@ -1,14 +1,24 @@
 """Training script for CLR experiments."""
 
 import argparse
+import csv
 import logging
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
+import torch.nn as nn
+import torch.optim as optim
 import yaml
+from torch.optim.lr_scheduler import CyclicLR
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+
+from utils.data import get_dataloaders, get_num_classes
+from utils.models import get_model
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,7 +49,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_config(config_path: Path) -> dict[str, Any]:
+def load_config(config_path: Path) -> Dict[str, Any]:
     """Load and validate configuration from YAML file.
 
     Args:
@@ -91,8 +101,8 @@ def create_run_directory(
     model: str,
     dataset: str,
     scheduler: str,
-    policy: str | None = None,
-    step_size: int | None = None,
+    policy: Optional[str] = None,
+    step_size: Optional[int] = None,
 ) -> Path:
     """Create directory for experiment run output.
 
@@ -120,6 +130,340 @@ def create_run_directory(
     return run_dir
 
 
+def save_run_config(run_dir: Path, run_config: Dict[str, Any]) -> None:
+    """Save the run configuration to YAML file.
+
+    Args:
+        run_dir: Directory for this run.
+        run_config: Configuration dictionary for this specific run.
+    """
+    config_path = run_dir / "run_config.yaml"
+    with open(config_path, "w") as f:
+        yaml.dump(run_config, f, default_flow_style=False)
+
+
+def get_optimizer(
+    model: nn.Module,
+    optimizer_name: str,
+    lr: float,
+) -> optim.Optimizer:
+    """Create optimizer for the model.
+
+    Args:
+        model: The model to optimize.
+        optimizer_name: Name of optimizer (SGD, Adam).
+        lr: Learning rate.
+
+    Returns:
+        Configured optimizer.
+
+    Raises:
+        ValueError: If optimizer_name is not supported.
+    """
+    optimizer_name = optimizer_name.upper()
+
+    if optimizer_name == "SGD":
+        return optim.SGD(model.parameters(), lr=lr)
+
+    if optimizer_name == "ADAM":
+        return optim.Adam(model.parameters(), lr=lr)
+
+    raise ValueError(f"Unsupported optimizer: {optimizer_name}")
+
+
+def get_scheduler(
+    optimizer: optim.Optimizer,
+    policy: str,
+    base_lr: float,
+    max_lr: float,
+    step_size_iterations: int,
+) -> CyclicLR:
+    """Create cyclical learning rate scheduler.
+
+    Args:
+        optimizer: The optimizer to schedule.
+        policy: CLR policy (triangular, triangular2, exp_range).
+        base_lr: Minimum learning rate.
+        max_lr: Maximum learning rate.
+        step_size_iterations: Iterations per half-cycle.
+
+    Returns:
+        Configured CyclicLR scheduler.
+    """
+    return CyclicLR(
+        optimizer,
+        base_lr=base_lr,
+        max_lr=max_lr,
+        step_size_up=step_size_iterations,
+        mode=policy,
+        cycle_momentum=False,
+    )
+
+
+def train_epoch(
+    model: nn.Module,
+    train_loader: DataLoader,
+    criterion: nn.Module,
+    optimizer: optim.Optimizer,
+    scheduler: Optional[CyclicLR],
+    device: torch.device,
+    epoch: int,
+    metrics: List[Dict[str, Any]],
+) -> Tuple[float, float]:
+    """Train for one epoch.
+
+    Args:
+        model: Model to train.
+        train_loader: Training data loader.
+        criterion: Loss function.
+        optimizer: Optimizer.
+        scheduler: Learning rate scheduler (None for fixed LR).
+        device: Device to train on.
+        epoch: Current epoch number.
+        metrics: List to append per-iteration metrics.
+
+    Returns:
+        Tuple of (average loss, accuracy) for the epoch.
+    """
+    model.train()
+    running_loss = 0.0
+    correct = 0
+    total = 0
+
+    progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}")
+    for batch_idx, (inputs, targets) in enumerate(progress_bar):
+        inputs, targets = inputs.to(device), targets.to(device)
+
+        optimizer.zero_grad()
+        outputs = model(inputs)
+        loss = criterion(outputs, targets)
+        loss.backward()
+        optimizer.step()
+
+        if scheduler is not None:
+            scheduler.step()
+
+        running_loss += loss.item()
+        _, predicted = outputs.max(1)
+        total += targets.size(0)
+        correct += predicted.eq(targets).sum().item()
+
+        current_lr = optimizer.param_groups[0]["lr"]
+        iteration = epoch * len(train_loader) + batch_idx
+
+        metrics.append(
+            {
+                "iteration": iteration,
+                "epoch": epoch,
+                "batch": batch_idx,
+                "lr": current_lr,
+                "train_loss": loss.item(),
+            }
+        )
+
+    avg_loss = running_loss / len(train_loader)
+    accuracy = 100.0 * correct / total
+
+    return avg_loss, accuracy
+
+
+def evaluate(
+    model: nn.Module,
+    data_loader: DataLoader,
+    criterion: nn.Module,
+    device: torch.device,
+) -> Tuple[float, float]:
+    """Evaluate model on a dataset.
+
+    Args:
+        model: Model to evaluate.
+        data_loader: Data loader for evaluation.
+        criterion: Loss function.
+        device: Device to evaluate on.
+
+    Returns:
+        Tuple of (average loss, accuracy).
+    """
+    model.eval()
+    running_loss = 0.0
+    correct = 0
+    total = 0
+
+    with torch.no_grad():
+        for inputs, targets in data_loader:
+            inputs, targets = inputs.to(device), targets.to(device)
+            outputs = model(inputs)
+            loss = criterion(outputs, targets)
+
+            running_loss += loss.item()
+            _, predicted = outputs.max(1)
+            total += targets.size(0)
+            correct += predicted.eq(targets).sum().item()
+
+    avg_loss = running_loss / len(data_loader)
+    accuracy = 100.0 * correct / total
+
+    return avg_loss, accuracy
+
+
+def save_metrics(run_dir: Path, metrics: List[Dict[str, Any]]) -> None:
+    """Save metrics to CSV file.
+
+    Args:
+        run_dir: Directory for this run.
+        metrics: List of metric dictionaries.
+    """
+    if not metrics:
+        return
+
+    metrics_path = run_dir / "metrics.csv"
+    fieldnames = metrics[0].keys()
+
+    with open(metrics_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(metrics)
+
+
+def run_experiment(
+    config: Dict[str, Any],
+    run_config: Dict[str, Any],
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    test_loader: DataLoader,
+    device: torch.device,
+) -> None:
+    """Run a single experiment configuration.
+
+    Args:
+        config: Full configuration dictionary.
+        run_config: Configuration for this specific run.
+        train_loader: Training data loader.
+        val_loader: Validation data loader.
+        test_loader: Test data loader.
+        device: Device to train on.
+    """
+    run_dir = create_run_directory(
+        base_dir=Path("runs"),
+        model=config["model"],
+        dataset=config["dataset"],
+        scheduler=run_config["scheduler"],
+        policy=run_config.get("policy"),
+        step_size=run_config.get("step_size"),
+    )
+
+    save_run_config(run_dir, run_config)
+    logger.info("Run directory: %s", run_dir)
+
+    num_classes = get_num_classes(config["dataset"])
+    model = get_model(config["model"], num_classes)
+    model = model.to(device)
+
+    base_lr = run_config.get("base_lr", run_config.get("lr"))
+    optimizer = get_optimizer(model, config["optimizer"], base_lr)
+    criterion = nn.CrossEntropyLoss()
+
+    scheduler = None
+    if run_config["scheduler"] == "cyclic":
+        step_size_iterations = run_config["step_size"] * len(train_loader)
+        scheduler = get_scheduler(
+            optimizer,
+            run_config["policy"],
+            run_config["base_lr"],
+            run_config["max_lr"],
+            step_size_iterations,
+        )
+
+    metrics: List[Dict[str, Any]] = []
+    best_val_acc = 0.0
+    best_epoch = 0
+
+    for epoch in range(config["epochs"]):
+        epoch_start = time.time()
+
+        train_loss, train_acc = train_epoch(
+            model, train_loader, criterion, optimizer, scheduler, device, epoch, metrics
+        )
+
+        val_loss, val_acc = evaluate(model, val_loader, criterion, device)
+
+        epoch_time = time.time() - epoch_start
+
+        for m in metrics:
+            if m["epoch"] == epoch:
+                m["train_acc"] = train_acc
+                m["val_loss"] = val_loss
+                m["val_acc"] = val_acc
+                m["epoch_time"] = epoch_time
+
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            best_epoch = epoch
+            torch.save(model.state_dict(), run_dir / "best_model.pt")
+
+        logger.info(
+            "Epoch %d: train_loss=%.4f train_acc=%.2f%% "
+            "val_loss=%.4f val_acc=%.2f%% time=%.1fs",
+            epoch,
+            train_loss,
+            train_acc,
+            val_loss,
+            val_acc,
+            epoch_time,
+        )
+
+    _, test_acc = evaluate(model, test_loader, criterion, device)
+    logger.info("Test accuracy: %.2f%%", test_acc)
+
+    summary = {
+        "best_val_acc": best_val_acc,
+        "best_epoch": best_epoch,
+        "test_acc": test_acc,
+    }
+    with open(run_dir / "summary.yaml", "w") as f:
+        yaml.dump(summary, f)
+
+    save_metrics(run_dir, metrics)
+    torch.save(model.state_dict(), run_dir / "final_model.pt")
+
+
+def generate_run_configs(config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Generate all run configurations from the master config.
+
+    Args:
+        config: Master configuration with lists of values to test.
+
+    Returns:
+        List of individual run configurations.
+    """
+    run_configs = []
+
+    for scheduler in config["schedulers"]:
+        if scheduler == "none":
+            for lr in config.get("fixed_lrs", [0.01]):
+                run_configs.append(
+                    {
+                        "scheduler": "none",
+                        "lr": lr,
+                    }
+                )
+        elif scheduler == "cyclic":
+            for policy in config.get("clr_policies", ["triangular"]):
+                for base_lr, max_lr in config.get("lr_bounds", [[0.001, 0.1]]):
+                    for step_size in config.get("step_sizes", [4]):
+                        run_configs.append(
+                            {
+                                "scheduler": "cyclic",
+                                "policy": policy,
+                                "base_lr": base_lr,
+                                "max_lr": max_lr,
+                                "step_size": step_size,
+                            }
+                        )
+
+    return run_configs
+
+
 def main() -> None:
     """Main entry point for training script."""
     args = parse_args()
@@ -139,11 +483,44 @@ def main() -> None:
     set_seed(config["seed"])
     logger.info("Set random seed: %d", config["seed"])
 
+    run_configs = generate_run_configs(config)
+    logger.info("Generated %d experiment configurations", len(run_configs))
+
     if args.dry_run:
+        for i, rc in enumerate(run_configs):
+            logger.info("  Run %d: %s", i + 1, rc)
         logger.info("Dry run complete. Config is valid.")
         return
 
-    # TODO: Phase 7 - Training loop implementation
+    device = torch.device("cuda")
+
+    train_loader, val_loader, test_loader = get_dataloaders(
+        dataset_name=config["dataset"],
+        batch_size=config["batch_size"],
+        seed=config["seed"],
+    )
+    logger.info("Loaded dataset: %s", config["dataset"])
+    logger.info("  Train batches: %d", len(train_loader))
+    logger.info("  Val batches: %d", len(val_loader))
+    logger.info("  Test batches: %d", len(test_loader))
+
+    for i, run_config in enumerate(run_configs):
+        logger.info("=" * 60)
+        logger.info("Starting run %d/%d: %s", i + 1, len(run_configs), run_config)
+        logger.info("=" * 60)
+
+        set_seed(config["seed"])
+
+        run_experiment(
+            config=config,
+            run_config=run_config,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            test_loader=test_loader,
+            device=device,
+        )
+
+    logger.info("All experiments complete!")
 
 
 if __name__ == "__main__":
