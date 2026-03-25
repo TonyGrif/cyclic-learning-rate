@@ -15,7 +15,6 @@ import torch.optim as optim
 import yaml
 from torch.optim.lr_scheduler import CyclicLR
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 
 from utils.data import get_dataloaders, get_num_classes
 from utils.models import get_model
@@ -230,8 +229,7 @@ def train_epoch(
     correct = 0
     total = 0
 
-    progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}")
-    for batch_idx, (inputs, targets) in enumerate(progress_bar):
+    for batch_idx, (inputs, targets) in enumerate(train_loader):
         inputs, targets = inputs.to(device), targets.to(device)
 
         optimizer.zero_grad()
