@@ -26,6 +26,8 @@ env/
 # Project-specific
 runs/
 data/
+logs/*.out
+logs/*.err
 
 # OS
 .DS_Store
