@@ -1,0 +1,11 @@
+# Core dependencies (torch, torchvision, and jupyter provided by HPC modules)
+pyyaml>=6.0
+pandas>=2.0
+matplotlib>=3.7
+tqdm>=4.65
+
+# Code quality
+ruff>=0.1.0
+
+# Install project
+-e .
