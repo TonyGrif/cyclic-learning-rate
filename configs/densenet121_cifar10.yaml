@@ -2,7 +2,7 @@ model: densenet121
 dataset: cifar10
 
 epochs: 100
-batch_size: 128
+batch_size: 512
 seed: 42
 
 optimizer: SGD
@@ -10,9 +10,9 @@ optimizer: SGD
 schedulers: [none, cyclic]
 
 clr_policies: [triangular, triangular2, exp_range]
-lr_bounds:
-  - [0.001, 0.01]
-  - [0.001, 0.1]
-step_sizes: [2, 4, 8]
+lr_bounds:  # per Smith arXiv:1803.09820 (adjusted for weight_decay=1e-4)
+  - [0.08, 0.8]
+  - [0.1, 0.5]
+step_sizes: [20, 40]  # epochs per half-cycle (paper uses 22-70 for DenseNet)
 
-fixed_lrs: [0.001, 0.01, 0.1]
+fixed_lrs: [0.01, 0.1]

@@ -22,6 +22,7 @@ from utils.models import get_model
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
+    stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
 
@@ -162,10 +163,11 @@ def get_optimizer(
     optimizer_name = optimizer_name.upper()
 
     if optimizer_name == "SGD":
-        return optim.SGD(model.parameters(), lr=lr)
+        # momentum=0.9, weight_decay=1e-4 per Smith arXiv:1803.09820
+        return optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=1e-4)
 
     if optimizer_name == "ADAM":
-        return optim.Adam(model.parameters(), lr=lr)
+        return optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
 
     raise ValueError(f"Unsupported optimizer: {optimizer_name}")
 
