@@ -1,0 +1,18 @@
+model: resnet34
+dataset: cifar10
+
+epochs: 100
+batch_size: 128
+seed: 42
+
+optimizer: SGD
+
+schedulers: [none, cyclic]
+
+clr_policies: [triangular, triangular2, exp_range]
+lr_bounds:
+  - [0.001, 0.01]
+  - [0.001, 0.1]
+step_sizes: [2, 4, 8]  # epochs per half-cycle (per paper: 2-10 recommended)
+
+fixed_lrs: [0.001, 0.01, 0.1]
