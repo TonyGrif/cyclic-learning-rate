@@ -13,11 +13,15 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import yaml
-from torch.optim.lr_scheduler import CyclicLR
 from torch.utils.data import DataLoader
 
 from utils.data import get_dataloaders, get_num_classes
 from utils.models import get_model
+from utils.schedulers import (
+    get_cosine_scheduler,
+    get_cyclic_scheduler,
+    get_steplr_scheduler,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -103,6 +107,7 @@ def create_run_directory(
     scheduler: str,
     policy: Optional[str] = None,
     step_size: Optional[int] = None,
+    gamma: Optional[float] = None,
 ) -> Path:
     """Create directory for experiment run output.
 
@@ -110,9 +115,10 @@ def create_run_directory(
         base_dir: Base directory for all runs.
         model: Model name.
         dataset: Dataset name.
-        scheduler: Scheduler type (none, cyclic).
+        scheduler: Scheduler type (none, cyclic, steplr).
         policy: CLR policy name (if using cyclic scheduler).
-        step_size: Step size multiplier (if using cyclic scheduler).
+        step_size: Step size (epochs for steplr, half-cycle for cyclic).
+        gamma: Decay factor (if using steplr scheduler).
 
     Returns:
         Path to the created run directory.
@@ -121,8 +127,14 @@ def create_run_directory(
 
     if scheduler == "none":
         run_name = f"none_fixed_{timestamp}"
-    else:
+    elif scheduler == "cyclic":
         run_name = f"cyclic_{policy}_step{step_size}x_{timestamp}"
+    elif scheduler == "steplr":
+        run_name = f"steplr_step{step_size}_gamma{gamma}_{timestamp}"
+    elif scheduler == "cosine":
+        run_name = f"cosine_T{step_size}_eta{gamma}_{timestamp}"
+    else:
+        run_name = f"{scheduler}_{timestamp}"
 
     run_dir = base_dir / model / dataset / run_name
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -172,41 +184,12 @@ def get_optimizer(
     raise ValueError(f"Unsupported optimizer: {optimizer_name}")
 
 
-def get_scheduler(
-    optimizer: optim.Optimizer,
-    policy: str,
-    base_lr: float,
-    max_lr: float,
-    step_size_iterations: int,
-) -> CyclicLR:
-    """Create cyclical learning rate scheduler.
-
-    Args:
-        optimizer: The optimizer to schedule.
-        policy: CLR policy (triangular, triangular2, exp_range).
-        base_lr: Minimum learning rate.
-        max_lr: Maximum learning rate.
-        step_size_iterations: Iterations per half-cycle.
-
-    Returns:
-        Configured CyclicLR scheduler.
-    """
-    return CyclicLR(
-        optimizer,
-        base_lr=base_lr,
-        max_lr=max_lr,
-        step_size_up=step_size_iterations,
-        mode=policy,
-        cycle_momentum=False,
-    )
-
-
 def train_epoch(
     model: nn.Module,
     train_loader: DataLoader,
     criterion: nn.Module,
     optimizer: optim.Optimizer,
-    scheduler: Optional[CyclicLR],
+    scheduler: Optional[Any],
     device: torch.device,
     epoch: int,
     metrics: List[Dict[str, Any]],
@@ -349,7 +332,12 @@ def run_experiment(
         dataset=config["dataset"],
         scheduler=run_config["scheduler"],
         policy=run_config.get("policy"),
-        step_size=run_config.get("step_size"),
+        step_size=(
+            run_config.get("step_size")
+            or run_config.get("steplr_step_size")
+            or run_config.get("cosine_t_max")
+        ),
+        gamma=run_config.get("steplr_gamma") or run_config.get("cosine_eta_min"),
     )
 
     save_run_config(run_dir, run_config)
@@ -364,15 +352,31 @@ def run_experiment(
     criterion = nn.CrossEntropyLoss()
 
     scheduler = None
+    step_per_batch = True  # CyclicLR steps per batch, StepLR steps per epoch
+
     if run_config["scheduler"] == "cyclic":
         step_size_iterations = run_config["step_size"] * len(train_loader)
-        scheduler = get_scheduler(
+        scheduler = get_cyclic_scheduler(
             optimizer,
             run_config["policy"],
             run_config["base_lr"],
             run_config["max_lr"],
             step_size_iterations,
         )
+    elif run_config["scheduler"] == "steplr":
+        scheduler = get_steplr_scheduler(
+            optimizer,
+            run_config["steplr_step_size"],
+            run_config["steplr_gamma"],
+        )
+        step_per_batch = False
+    elif run_config["scheduler"] == "cosine":
+        scheduler = get_cosine_scheduler(
+            optimizer,
+            run_config["cosine_t_max"],
+            run_config["cosine_eta_min"],
+        )
+        step_per_batch = False
 
     metrics: List[Dict[str, Any]] = []
     best_val_acc = 0.0
@@ -382,8 +386,19 @@ def run_experiment(
         epoch_start = time.time()
 
         train_loss, train_acc = train_epoch(
-            model, train_loader, criterion, optimizer, scheduler, device, epoch, metrics
+            model,
+            train_loader,
+            criterion,
+            optimizer,
+            scheduler if step_per_batch else None,
+            device,
+            epoch,
+            metrics,
         )
+
+        # Step epoch-level schedulers after training epoch
+        if scheduler is not None and not step_per_batch:
+            scheduler.step()
 
         val_loss, val_acc = evaluate(model, val_loader, criterion, device)
 
@@ -460,6 +475,30 @@ def generate_run_configs(config: Dict[str, Any]) -> List[Dict[str, Any]]:
                                 "step_size": step_size,
                             }
                         )
+        elif scheduler == "steplr":
+            for lr in config.get("steplr_initial_lrs", [0.1]):
+                for step_size in config.get("steplr_step_sizes", [30]):
+                    for gamma in config.get("steplr_gammas", [0.1]):
+                        run_configs.append(
+                            {
+                                "scheduler": "steplr",
+                                "lr": lr,
+                                "steplr_step_size": step_size,
+                                "steplr_gamma": gamma,
+                            }
+                        )
+        elif scheduler == "cosine":
+            for lr in config.get("cosine_initial_lrs", [0.1]):
+                for t_max in config.get("cosine_t_max", [100]):
+                    for eta_min in config.get("cosine_eta_min", [0.0]):
+                        run_configs.append(
+                            {
+                                "scheduler": "cosine",
+                                "lr": lr,
+                                "cosine_t_max": t_max,
+                                "cosine_eta_min": eta_min,
+                            }
+                        )
 
     return run_configs
 
@@ -505,9 +544,7 @@ def main() -> None:
     logger.info("  Test batches: %d", len(test_loader))
 
     for i, run_config in enumerate(run_configs):
-        logger.info("=" * 60)
         logger.info("Starting run %d/%d: %s", i + 1, len(run_configs), run_config)
-        logger.info("=" * 60)
 
         set_seed(config["seed"])
 
