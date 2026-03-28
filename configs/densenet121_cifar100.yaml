@@ -1,7 +1,7 @@
 model: densenet121
 dataset: cifar100
 
-epochs: 100
+epochs: 200
 batch_size: 512
 seed: 42
 
@@ -19,9 +19,9 @@ step_sizes: [4, 8]
 fixed_lrs: [0.1, 0.2]
 
 steplr_initial_lrs: [0.1, 0.05]
-steplr_step_sizes: [30, 50]
+steplr_step_sizes: [50, 80]  # decays at [50,100,150] and [80,160] — standard milestones over 200 epochs
 steplr_gammas: [0.1, 0.2]
 
 cosine_initial_lrs: [0.1, 0.05]
-cosine_t_max: [100]
+cosine_t_max: [200]  # full cosine cycle over 200 epochs
 cosine_eta_min: [0.0, 0.001]

@@ -19,7 +19,7 @@ step_sizes: [4, 8]
 fixed_lrs: [0.1, 0.2]
 
 steplr_initial_lrs: [0.1, 0.05]
-steplr_step_sizes: [30, 50]
+steplr_step_sizes: [25, 40]  # decays at [25,50,75] and [40,80] — standard 50%/75% milestones
 steplr_gammas: [0.1, 0.2]
 
 cosine_initial_lrs: [0.1, 0.05]

@@ -19,8 +19,8 @@ step_sizes: [4, 8] # epochs per half-cycle; paper: cycle_length = max_epochs/10 
 fixed_lrs: [0.1, 0.2]  # Table 4 fixed LRs of 0.1, 0.2, 0.3
 
 steplr_initial_lrs: [0.1, 0.05]
-steplr_step_sizes: [30, 50]  # epochs between LR decay
-steplr_gammas: [0.1, 0.2]  # decay factor
+steplr_step_sizes: [25, 40]  # decays at [25,50,75] and [40,80] — standard 50%/75% milestones
+steplr_gammas: [0.1, 0.2]
 
 cosine_initial_lrs: [0.1, 0.05]
 cosine_t_max: [100]  # total epochs for cosine cycle

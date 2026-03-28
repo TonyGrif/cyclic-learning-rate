@@ -337,7 +337,20 @@ def run_experiment(
     )
 
     save_run_config(run_dir, run_config)
-    logger.info("Run directory: %s", run_dir)
+
+    logger.info("Run Configuration:")
+    logger.info("  Run directory : %s", run_dir)
+    logger.info("  Model         : %s", config["model"])
+    logger.info("  Dataset       : %s", config["dataset"])
+    logger.info("  Epochs        : %d", config["epochs"])
+    logger.info("  Batch size    : %d", config["batch_size"])
+    logger.info("  Seed          : %d", config["seed"])
+    logger.info("  Optimizer     : %s", config["optimizer"])
+    logger.info("  Scheduler     : %s", run_config["scheduler"])
+    for key, value in run_config.items():
+        if key != "scheduler":
+            logger.info("    %-20s: %s", key, value)
+    logger.info("=" * 60)
 
     num_classes = get_num_classes(config["dataset"])
     model = get_model(config["model"], num_classes)
