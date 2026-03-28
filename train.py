@@ -1,7 +1,7 @@
 """Training script for CLR experiments."""
 
 import argparse
-import csv
+import json
 import logging
 import sys
 import time
@@ -289,23 +289,19 @@ def evaluate(
     return avg_loss, accuracy
 
 
-def save_metrics(run_dir: Path, metrics: List[Dict[str, Any]]) -> None:
-    """Save metrics to CSV file.
+def save_metrics(run_dir: Path, metrics: List[Dict[str, Any]], filename: str) -> None:
+    """Save metrics to a JSON file.
 
     Args:
         run_dir: Directory for this run.
         metrics: List of metric dictionaries.
+        filename: Name of the JSON file to write.
     """
     if not metrics:
         return
 
-    metrics_path = run_dir / "metrics.csv"
-    fieldnames = metrics[0].keys()
-
-    with open(metrics_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(metrics)
+    with open(run_dir / filename, "w") as f:
+        json.dump(metrics, f, indent=2)
 
 
 def run_experiment(
@@ -362,6 +358,7 @@ def run_experiment(
             run_config["base_lr"],
             run_config["max_lr"],
             step_size_iterations,
+            gamma=run_config.get("gamma", 0.99994),
         )
     elif run_config["scheduler"] == "steplr":
         scheduler = get_steplr_scheduler(
@@ -378,7 +375,8 @@ def run_experiment(
         )
         step_per_batch = False
 
-    metrics: List[Dict[str, Any]] = []
+    iter_metrics: List[Dict[str, Any]] = []
+    epoch_metrics: List[Dict[str, Any]] = []
     best_val_acc = 0.0
     best_epoch = 0
 
@@ -393,7 +391,7 @@ def run_experiment(
             scheduler if step_per_batch else None,
             device,
             epoch,
-            metrics,
+            iter_metrics,
         )
 
         # Step epoch-level schedulers after training epoch
@@ -404,12 +402,16 @@ def run_experiment(
 
         epoch_time = time.time() - epoch_start
 
-        for m in metrics:
-            if m["epoch"] == epoch:
-                m["train_acc"] = train_acc
-                m["val_loss"] = val_loss
-                m["val_acc"] = val_acc
-                m["epoch_time"] = epoch_time
+        epoch_metrics.append(
+            {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "train_acc": train_acc,
+                "val_loss": val_loss,
+                "val_acc": val_acc,
+                "epoch_time": epoch_time,
+            }
+        )
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
@@ -438,7 +440,8 @@ def run_experiment(
     with open(run_dir / "summary.yaml", "w") as f:
         yaml.dump(summary, f)
 
-    save_metrics(run_dir, metrics)
+    save_metrics(run_dir, iter_metrics, "metrics_iter.json")
+    save_metrics(run_dir, epoch_metrics, "metrics_epoch.json")
     torch.save(model.state_dict(), run_dir / "final_model.pt")
 
 
@@ -473,6 +476,7 @@ def generate_run_configs(config: Dict[str, Any]) -> List[Dict[str, Any]]:
                                 "base_lr": base_lr,
                                 "max_lr": max_lr,
                                 "step_size": step_size,
+                                "gamma": config.get("clr_gamma", 0.99994),
                             }
                         )
         elif scheduler == "steplr":

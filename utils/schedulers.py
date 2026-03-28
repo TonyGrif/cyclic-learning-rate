@@ -10,6 +10,7 @@ def get_cyclic_scheduler(
     base_lr: float,
     max_lr: float,
     step_size_iterations: int,
+    gamma: float = 0.99994,
 ) -> CyclicLR:
     """Create cyclical learning rate scheduler.
 
@@ -19,6 +20,8 @@ def get_cyclic_scheduler(
         base_lr: Minimum learning rate.
         max_lr: Maximum learning rate.
         step_size_iterations: Iterations per half-cycle.
+        gamma: Decay factor for exp_range mode (gamma^iteration). Ignored for
+            other modes. Default 0.99994 per Smith arXiv:1506.01186.
 
     Returns:
         Configured CyclicLR scheduler.
@@ -29,6 +32,7 @@ def get_cyclic_scheduler(
         max_lr=max_lr,
         step_size_up=step_size_iterations,
         mode=policy,
+        gamma=gamma,
         cycle_momentum=False,
     )
 
