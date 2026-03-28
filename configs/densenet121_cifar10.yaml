@@ -10,19 +10,18 @@ optimizer: SGD
 schedulers: [none, cyclic, steplr, cosine]
 
 clr_policies: [triangular, triangular2, exp_range]
-lr_bounds:  # per Smith arXiv:1803.09820 (adjusted for weight_decay=1e-4)
-  - [0.08, 0.8]
-  - [0.1, 0.5]
-step_sizes: [20, 40]  # epochs per half-cycle (paper uses 22-70 for DenseNet)
+clr_gamma: 0.99994  # (Smith arXiv:1506.01186)
+lr_bounds:  # Smith Table 4
+  - [0.1, 0.2]
+  - [0.1, 0.3]
+step_sizes: [4, 8] # epochs per half-cycle; paper: cycle_length = max_epochs/10 -> stepsize = 5
 
-fixed_lrs: [0.01, 0.1]
+fixed_lrs: [0.1, 0.2]  # Table 4 fixed LRs of 0.1, 0.2, 0.3
 
-# StepLR scheduler parameters
 steplr_initial_lrs: [0.1, 0.05]
 steplr_step_sizes: [30, 50]  # epochs between LR decay
 steplr_gammas: [0.1, 0.2]  # decay factor
 
-# Cosine annealing parameters
 cosine_initial_lrs: [0.1, 0.05]
 cosine_t_max: [100]  # total epochs for cosine cycle
 cosine_eta_min: [0.0, 0.001]  # minimum LR

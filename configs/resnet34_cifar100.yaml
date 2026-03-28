@@ -10,19 +10,18 @@ optimizer: SGD
 schedulers: [none, cyclic, steplr, cosine]
 
 clr_policies: [triangular, triangular2, exp_range]
-lr_bounds:  # per Smith arXiv:1803.09820: ResNet CIFAR-100
-  - [0.09, 0.9]
-  - [0.1, 0.5]
-step_sizes: [20, 40]  # epochs per half-cycle (paper uses 41-45 for ResNet)
+clr_gamma: 0.99994
+lr_bounds:
+  - [0.1, 0.3]
+  - [0.1, 0.2]
+step_sizes: [4, 8]
 
-fixed_lrs: [0.01, 0.1]
+fixed_lrs: [0.1, 0.2]
 
-# StepLR scheduler parameters
 steplr_initial_lrs: [0.1, 0.05]
-steplr_step_sizes: [30, 50]  # epochs between LR decay
-steplr_gammas: [0.1, 0.2]  # decay factor
+steplr_step_sizes: [30, 50]
+steplr_gammas: [0.1, 0.2]
 
-# Cosine annealing parameters
 cosine_initial_lrs: [0.1, 0.05]
-cosine_t_max: [100]  # total epochs for cosine cycle
-cosine_eta_min: [0.0, 0.001]  # minimum LR
+cosine_t_max: [100]
+cosine_eta_min: [0.0, 0.001]
